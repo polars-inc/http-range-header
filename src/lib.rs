@@ -231,12 +231,8 @@ impl ParsedRanges {
         for parsed in &self.ranges {
             let start = match parsed.start {
                 StartPosition::Index(i) => i,
-                StartPosition::FromLast(i) => {
-                    if i > file_size_bytes {
-                        return Err(RangeUnsatisfiableError::FileSuffixOutOfBounds);
-                    }
-                    file_size_bytes.saturating_sub(i)
-                }
+                // RFC 9110 14.1.2: a suffix longer than the representation selects all of it
+                StartPosition::FromLast(i) => file_size_bytes.saturating_sub(i),
             };
             let end = match parsed.end {
                 EndPosition::Index(i) => core::cmp::min(i, file_size_bytes.saturating_sub(1)),
@@ -568,12 +564,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_out_of_bounds_suffix_overrun_as_unsatisfiable() {
+    fn parse_suffix_longer_than_file_as_whole_file() {
         let input = &format!("bytes=-{}", TEST_FILE_LENGTH + 1);
         let parsed = parse_range_header(input)
             .unwrap()
-            .validate(TEST_FILE_LENGTH);
-        assert_eq!(parsed, Err(RangeUnsatisfiableError::FileSuffixOutOfBounds));
+            .validate(TEST_FILE_LENGTH)
+            .unwrap();
+        assert_eq!(parsed, vec![0..=TEST_FILE_LENGTH - 1]);
+    }
+
+    #[test]
+    fn parse_suffix_of_empty_file_as_satisfiable() {
+        // RFC 9110 14.1.1: for a zero-length representation, a suffix range with a non-zero
+        // length is the only satisfiable range. It validates like `bytes=0-` on an empty file.
+        let parsed = parse_range_header("bytes=-1").unwrap().validate(0).unwrap();
+        assert_eq!(parsed, vec![0..=0]);
+        assert_eq!(
+            parse_range_header("bytes=0-").unwrap().validate(0).unwrap(),
+            parsed
+        );
     }
 
     #[test]
